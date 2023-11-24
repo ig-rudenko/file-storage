@@ -1,3 +1,4 @@
+import os
 import pathlib
 import shutil
 from datetime import datetime
@@ -13,13 +14,15 @@ from .exc import (
 )
 from ..schema import File
 
-STORAGE_PATH = pathlib.Path(__file__).parent.parent.parent
+STORAGE_PATH = pathlib.Path(__file__).parent.parent.parent / os.getenv(
+    "STORAGE_DIR", "user_storage"
+)
 
 
 class UserStorage:
     def __init__(self, user_id: int):
         self._user_id = user_id
-        self._user_storage = STORAGE_PATH / "user_storage" / str(user_id)
+        self._user_storage = STORAGE_PATH / str(user_id)
         self._user_storage.mkdir(parents=True, exist_ok=True)
 
     @handle_permission_denied
