@@ -1,9 +1,9 @@
 import os
 import pathlib
-import shutil
 from datetime import datetime
-from typing import BinaryIO
+from typing import AsyncIterable
 
+from aiopath import AsyncPath
 from fastapi import UploadFile
 
 from .deco import handle_permission_denied
@@ -24,82 +24,86 @@ STORAGE_PATH = pathlib.Path(__file__).parent.parent.parent / os.getenv(
 class UserStorage:
     def __init__(self, user_id: int):
         self._user_id = user_id
-        self._user_storage = STORAGE_PATH / str(user_id)
+        self._user_storage: AsyncPath = AsyncPath(STORAGE_PATH / str(user_id))
         self._user_storage.mkdir(parents=True, exist_ok=True)
 
     @handle_permission_denied
-    def list_user_path(self, path: str) -> list[File]:
+    async def list_user_path(self, path: str) -> list[File]:
         self._validate_path(path)
         file_folder = self._user_storage / path
 
-        if file_folder.exists() and not file_folder.is_dir():
+        if await file_folder.exists() and not await file_folder.is_dir():
             raise NotFolderError(f"`{path}` не является папкой.")
         files = []
-        for file in file_folder.glob("*"):
-            file_stat = file.stat()
+        async for file in file_folder.glob("*"):
+            file_stat = await file.stat()
             files.append(
                 File(
                     name=file.name,
                     size=file_stat.st_size,
-                    isDir=file.is_dir(),
+                    isDir=await file.is_dir(),
                     modTime=datetime.fromtimestamp(file_stat.st_mtime),
                 )
             )
         return files
 
     @handle_permission_denied
-    def create_folder(self, folder_path: str):
+    async def create_folder(self, folder_path: str):
         self._validate_path(folder_path)
-        (self._user_storage / folder_path).mkdir(parents=True, exist_ok=True)
+        await (self._user_storage / folder_path).mkdir(parents=True, exist_ok=True)
 
     @handle_permission_denied
-    def upload_file(self, path: str, file_obj: UploadFile) -> None:
+    async def upload_file(self, path: str, file_obj: UploadFile):
         self._validate_path(path)
         file_folder = self._user_storage / path
         file_name = file_obj.filename
-        if file_folder.exists() and not file_folder.is_dir():
+
+        if await file_folder.exists() and not await file_folder.is_dir():
             raise NotFolderError(f"`{path}/{file_name}` не является папкой.")
 
-        file_folder.mkdir(parents=True, exist_ok=True)
+        await file_folder.mkdir(parents=True, exist_ok=True)
 
-        with (file_folder / file_name).open("wb") as f:
-            shutil.copyfileobj(file_obj.file, f, length=1024 * 1024)
+        async with (file_folder / file_name).open("wb") as f:
+            while content := await file_obj.read(1024):
+                await f.write(content)
 
     @handle_permission_denied
-    def download_file(self, path: str) -> BinaryIO:
+    async def download_file(self, path: str) -> AsyncIterable[bytes]:
         self._validate_path(path)
         file_path = self._user_storage / path
-        if not file_path.exists():
+        if not await file_path.exists():
             raise PathNotExistsError(f"Файл {path} не найден.")
-        if not file_path.is_file():
+        if not await file_path.is_file():
             raise NotFileError(f"`{path}` не является файлом.")
 
-        return file_path.open("rb")
+        async with file_path.open("rb") as f:
+            while content := await f.read(1024):
+                yield content
 
     @handle_permission_denied
-    def delete_file(self, path: str):
+    async def delete_file(self, path: str):
         self._validate_path(path)
         file_path = self._user_storage / path
-        if not file_path.exists():
+        if not await file_path.exists():
             raise PathNotExistsError(f"Файл {path} не найден.")
 
-        if file_path.is_file():
-            file_path.unlink(missing_ok=True)
+        if await file_path.is_file():
+            await file_path.unlink(missing_ok=True)
         else:
             try:
-                file_path.rmdir()
+                await file_path.rmdir()
             except OSError:
                 raise FolderNotEmptyException(
                     "Папка должна быть пустой перед удалением."
                 )
 
     @handle_permission_denied
-    def rename_file(self, path: str, new_name: str):
+    async def rename_file(self, path: str, new_name: str):
         self._validate_path(path)
         file_path = self._user_storage / path
-        if not file_path.exists():
+        if not await file_path.exists():
             raise FileNotFoundError(f"Файл {path} не найден.")
-        file_path.rename(file_path.parent / new_name)
+        await file_path.rename(file_path.parent / new_name)
 
     @staticmethod
     def _validate_path(path: str):
